@@ -10,37 +10,59 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+	"github.com/vashafaris/nucleus/internal/infrastructure"
+	"github.com/vashafaris/nucleus/internal/interfaces/http/router"
 	"github.com/vashafaris/nucleus/pkg/config"
 )
 
 func main() {
+	// Load .env file - try .env.local first for local development
+	if err := godotenv.Load(".env.local"); err != nil {
+		if err := godotenv.Load(); err != nil {
+			log.Printf("Warning: .env file not found")
+		}
+	}
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Debug: Print loaded configuration
-	log.Printf("Loaded configuration:")
-	log.Printf("  App Name: %s", cfg.App.Name)
-	log.Printf("  Environment: %s", cfg.App.Env)
-	log.Printf("  Port: %s", cfg.App.Port)
-	log.Printf("  DB Host: %s", cfg.Database.Host)
-	log.Printf("  DB Name: %s", cfg.Database.Name)
-	log.Printf("  DB User: %s", cfg.Database.User)
-
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 
-	// Setup logger (will be implemented in infrastructure layer)
-	log.Printf("Starting %s application on port %s", cfg.App.Name, cfg.App.Port)
+	log.Printf("Starting %s application...", cfg.App.Name)
+
+	// Initialize infrastructure
+	infra, err := infrastructure.NewManager(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize infrastructure: %v", err)
+	}
+	defer func() {
+		if err := infra.Close(); err != nil {
+			log.Printf("Error closing infrastructure: %v", err)
+		}
+	}()
+
+	// Check infrastructure health
+	if healthErrors := infra.Health(); len(healthErrors) > 0 {
+		log.Printf("Warning: Some infrastructure components are unhealthy: %v", healthErrors)
+	} else {
+		log.Println("All infrastructure components are healthy")
+	}
+
+	// Setup router
+	r := router.New(infra)
+	r.Setup()
 
 	// Create server
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%s", cfg.App.Port),
-		Handler:      setupRoutes(), // Will be implemented
+		Handler:      r.Engine(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -48,12 +70,11 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
+		log.Printf("%s is running on http://localhost:%s", cfg.App.Name, cfg.App.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
-
-	log.Printf("%s is running on http://localhost:%s", cfg.App.Name, cfg.App.Port)
 
 	// Wait for interrupt signal to gracefully shutdown
 	quit := make(chan os.Signal, 1)
@@ -69,18 +90,5 @@ func main() {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
-	log.Println("Server exited")
-}
-
-// setupRoutes will be replaced with actual router setup
-func setupRoutes() http.Handler {
-	mux := http.NewServeMux()
-
-	// Health check endpoint
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-
-	return mux
+	log.Println("Server exited gracefully")
 }

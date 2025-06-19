@@ -175,7 +175,7 @@ func setDefaults() {
 
 	// Database defaults
 	viper.SetDefault("DB_HOST", "localhost")
-	viper.SetDefault("DB_PORT", "5432")
+	viper.SetDefault("DB_PORT", "3")
 	viper.SetDefault("DB_SSL_MODE", "disable")
 
 	// Redis defaults
